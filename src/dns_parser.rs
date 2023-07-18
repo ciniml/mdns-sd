@@ -8,7 +8,8 @@
 use crate::log::{debug, error};
 use crate::{Error, Result, ServiceInfo};
 use if_addrs::Ifv4Addr;
-use std::{any::Any, cmp, collections::HashMap, fmt, net::Ipv4Addr, str, time::SystemTime};
+use log::info;
+use std::{any::Any, cmp, collections::HashMap, fmt, net::{Ipv4Addr, Ipv6Addr, IpAddr}, str, time::SystemTime};
 
 pub(crate) const TYPE_A: u16 = 1; // IPv4 address
 pub(crate) const TYPE_CNAME: u16 = 5;
@@ -167,11 +168,11 @@ pub(crate) trait DnsRecordExt: fmt::Debug {
 #[derive(Debug)]
 pub(crate) struct DnsAddress {
     pub(crate) record: DnsRecord,
-    pub(crate) address: Ipv4Addr,
+    pub(crate) address: IpAddr,
 }
 
 impl DnsAddress {
-    pub(crate) fn new(name: &str, ty: u16, class: u16, ttl: u32, address: Ipv4Addr) -> Self {
+    pub(crate) fn new(name: &str, ty: u16, class: u16, ttl: u32, address: IpAddr) -> Self {
         let record = DnsRecord::new(name, ty, class, ttl);
         Self { record, address }
     }
@@ -187,7 +188,10 @@ impl DnsRecordExt for DnsAddress {
     }
 
     fn write(&self, packet: &mut DnsOutPacket) {
-        packet.write_bytes(self.address.octets().as_ref());
+        match self.address {
+            IpAddr::V4(addr) => packet.write_bytes(addr.octets().as_ref()),
+            IpAddr::V6(addr) => packet.write_bytes(addr.octets().as_ref()),
+        }
     }
 
     fn any(&self) -> &dyn Any {
@@ -744,7 +748,7 @@ impl DnsOutgoing {
                 TYPE_A,
                 CLASS_IN | CLASS_UNIQUE,
                 service.get_host_ttl(),
-                address,
+                IpAddr::V4(address),
             )));
         }
     }
@@ -934,7 +938,10 @@ impl DnsIncoming {
             let length = u16_from_be_slice(&slice[8..10]) as usize;
             self.offset += 10;
             let next_offset = self.offset + length;
-
+            info!(
+                "read_others: name {} type {} class {} ttl {} length {}",
+                name, ty, class, ttl, length
+            );
             // decode RDATA based on the record type.
             let rec: Option<DnsRecordBox> = match ty {
                 TYPE_A => Some(Box::new(DnsAddress::new(
@@ -942,7 +949,14 @@ impl DnsIncoming {
                     ty,
                     class,
                     ttl,
-                    self.read_ipv4(),
+                    IpAddr::V4(self.read_ipv4()),
+                ))),
+                TYPE_AAAA => Some(Box::new(DnsAddress::new(
+                    &name,
+                    ty,
+                    class,
+                    ttl,
+                    IpAddr::V6(self.read_ipv6()),
                 ))),
                 TYPE_CNAME | TYPE_PTR => Some(Box::new(DnsPointer::new(
                     &name,
@@ -975,11 +989,6 @@ impl DnsIncoming {
                     self.read_char_string(),
                     self.read_char_string(),
                 ))),
-                TYPE_AAAA => {
-                    debug!("We don't support IPv6 TYPE_AAAA records");
-                    self.offset += length;
-                    None
-                }
                 _ => {
                     debug!("Unknown DNS record type");
                     self.offset += length;
@@ -1027,6 +1036,21 @@ impl DnsIncoming {
         let bytes = &self.data[self.offset..self.offset + 4];
         self.offset += bytes.len();
         Ipv4Addr::new(bytes[0], bytes[1], bytes[2], bytes[3])
+    }
+
+    fn read_ipv6(&mut self) -> Ipv6Addr {
+        let bytes = &self.data[self.offset..self.offset + 16];
+        self.offset += bytes.len();
+        Ipv6Addr::new(
+            u16_from_be_slice(&bytes[..2]),
+            u16_from_be_slice(&bytes[2..4]),
+            u16_from_be_slice(&bytes[4..6]),
+            u16_from_be_slice(&bytes[6..8]),
+            u16_from_be_slice(&bytes[8..10]),
+            u16_from_be_slice(&bytes[10..12]),
+            u16_from_be_slice(&bytes[12..14]),
+            u16_from_be_slice(&bytes[14..16]),
+        )
     }
 
     fn read_string(&mut self, length: usize) -> String {

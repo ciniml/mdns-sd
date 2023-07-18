@@ -34,7 +34,7 @@ use crate::{
     dns_parser::{
         current_time_millis, DnsAddress, DnsIncoming, DnsOutgoing, DnsPointer, DnsRecordBox,
         DnsRecordExt, DnsSrv, DnsTxt, CLASS_IN, CLASS_UNIQUE, FLAGS_AA, FLAGS_QR_QUERY,
-        FLAGS_QR_RESPONSE, MAX_MSG_ABSOLUTE, TYPE_A, TYPE_ANY, TYPE_PTR, TYPE_SRV, TYPE_TXT,
+        FLAGS_QR_RESPONSE, MAX_MSG_ABSOLUTE, TYPE_A, TYPE_ANY, TYPE_PTR, TYPE_SRV, TYPE_TXT, TYPE_AAAA,
     },
     error::{Error, Result},
     service_info::{split_sub_domain, ServiceInfo},
@@ -49,7 +49,7 @@ use std::{
     collections::{HashMap, HashSet},
     fmt,
     io::Read,
-    net::{Ipv4Addr, SocketAddrV4},
+    net::{Ipv4Addr, SocketAddrV4, IpAddr},
     str, thread,
     time::Duration,
     vec,
@@ -870,7 +870,7 @@ impl Zeroconf {
                     TYPE_A,
                     CLASS_IN | CLASS_UNIQUE,
                     info.get_host_ttl(),
-                    addr,
+                    IpAddr::V4(addr),
                 )),
                 0,
             );
@@ -937,7 +937,7 @@ impl Zeroconf {
                     TYPE_A,
                     CLASS_IN | CLASS_UNIQUE,
                     0,
-                    addr,
+                    IpAddr::V4(addr),
                 )),
                 0,
             );
@@ -1130,9 +1130,10 @@ impl Zeroconf {
 
         // resolve A records
         if let Some(records) = self.cache.addr.get(info.get_hostname()) {
+            log::info!("records: {:?}", records);
             for answer in records.iter() {
                 if let Some(dns_a) = answer.any().downcast_ref::<DnsAddress>() {
-                    info.insert_ipv4addr(dns_a.address);
+                    info.insert_ipaddr(dns_a.address)
                 }
             }
         }
@@ -1312,7 +1313,7 @@ impl Zeroconf {
                                         TYPE_A,
                                         CLASS_IN | CLASS_UNIQUE,
                                         service.get_host_ttl(),
-                                        address,
+                                        IpAddr::V4(address),
                                     )),
                                 );
                             }
@@ -1369,7 +1370,7 @@ impl Zeroconf {
                             TYPE_A,
                             CLASS_IN | CLASS_UNIQUE,
                             service.get_host_ttl(),
-                            address,
+                            IpAddr::V4(address),
                         )));
                     }
                 }
@@ -1509,6 +1510,7 @@ impl DnsCache {
             TYPE_SRV => self.srv.entry(entry_name).or_default(),
             TYPE_TXT => self.txt.entry(entry_name).or_default(),
             TYPE_A => self.addr.entry(entry_name).or_default(),
+            TYPE_AAAA => self.addr.entry(entry_name).or_default(),
             _ => return None,
         };
 

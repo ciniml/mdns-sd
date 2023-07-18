@@ -6,7 +6,7 @@ use std::{
     collections::{HashMap, HashSet},
     convert::TryInto,
     fmt,
-    net::Ipv4Addr,
+    net::{Ipv4Addr, IpAddr, Ipv6Addr},
     str::FromStr,
 };
 
@@ -24,7 +24,7 @@ pub struct ServiceInfo {
     sub_domain: Option<String>, // <subservice>._sub.<service>.<domain>
     fullname: String,           // <instance>.<service>.<domain>
     server: String,             // fully qualified name for service host
-    addresses: HashSet<Ipv4Addr>,
+    addresses: HashSet<IpAddr>,
     port: u16,
     host_ttl: u32,  // used for SRV and Address records
     other_ttl: u32, // used for PTR and TXT records
@@ -194,7 +194,7 @@ impl ServiceInfo {
 
     /// Returns the service's addresses
     #[inline]
-    pub fn get_addresses(&self) -> &HashSet<Ipv4Addr> {
+    pub fn get_addresses(&self) -> &HashSet<IpAddr> {
         &self.addresses
     }
 
@@ -227,7 +227,10 @@ impl ServiceInfo {
     pub(crate) fn get_addrs_on_intf(&self, intf: &Ifv4Addr) -> Vec<Ipv4Addr> {
         self.addresses
             .iter()
-            .filter(|a| valid_ipv4_on_intf(a, intf))
+            .filter_map(|a| match a {
+                IpAddr::V4(addr) => if valid_ipv4_on_intf(addr, intf) { Some(addr) } else { None },
+                _ => None,
+            })
             .copied()
             .collect()
     }
@@ -242,13 +245,29 @@ impl ServiceInfo {
         !some_missing
     }
 
-    /// Insert `addr` into service info addresses.
-    pub(crate) fn insert_ipv4addr(&mut self, addr: Ipv4Addr) {
+    pub(crate) fn insert_ipaddr(&mut self, addr: IpAddr) {
         self.addresses.insert(addr);
     }
 
-    pub(crate) fn remove_ipv4addr(&mut self, addr: &Ipv4Addr) {
+    pub(crate) fn remove_ipaddr(&mut self, addr: &IpAddr) {
         self.addresses.remove(addr);
+    }
+
+    /// Insert `addr` into service info addresses.
+    pub(crate) fn insert_ipv4addr(&mut self, addr: Ipv4Addr) {
+        self.addresses.insert(IpAddr::V4(addr));
+    }
+
+    pub(crate) fn remove_ipv4addr(&mut self, addr: &Ipv4Addr) {
+        self.addresses.remove(&IpAddr::V4(*addr));
+    }
+
+    pub(crate) fn insert_ipv6addr(&mut self, addr: Ipv6Addr) {
+        self.addresses.insert(IpAddr::V6(addr));
+    }
+
+    pub(crate) fn remove_ipv6addr(&mut self, addr: &Ipv6Addr) {
+        self.addresses.remove(&IpAddr::V6(*addr));
     }
 
     pub(crate) fn generate_txt(&self) -> Vec<u8> {
@@ -277,11 +296,11 @@ impl ServiceInfo {
 
 /// This trait allows for parsing an input into a set of one or multiple [`Ipv4Addr`].
 pub trait AsIpv4Addrs {
-    fn as_ipv4_addrs(&self) -> Result<HashSet<Ipv4Addr>>;
+    fn as_ipv4_addrs(&self) -> Result<HashSet<IpAddr>>;
 }
 
 impl<T: AsIpv4Addrs> AsIpv4Addrs for &T {
-    fn as_ipv4_addrs(&self) -> Result<HashSet<Ipv4Addr>> {
+    fn as_ipv4_addrs(&self) -> Result<HashSet<IpAddr>> {
         (*self).as_ipv4_addrs()
     }
 }
@@ -291,14 +310,14 @@ impl<T: AsIpv4Addrs> AsIpv4Addrs for &T {
 ///
 /// If the string is empty, will return an empty set.
 impl AsIpv4Addrs for &str {
-    fn as_ipv4_addrs(&self) -> Result<HashSet<Ipv4Addr>> {
+    fn as_ipv4_addrs(&self) -> Result<HashSet<IpAddr>> {
         let mut addrs = HashSet::new();
 
         if !self.is_empty() {
             let iter = self.split(',').map(str::trim).map(Ipv4Addr::from_str);
             for addr in iter {
                 let addr = addr.map_err(|err| Error::ParseIpAddr(err.to_string()))?;
-                addrs.insert(addr);
+                addrs.insert(IpAddr::V4(addr));
             }
         }
 
@@ -307,14 +326,14 @@ impl AsIpv4Addrs for &str {
 }
 
 impl AsIpv4Addrs for String {
-    fn as_ipv4_addrs(&self) -> Result<HashSet<Ipv4Addr>> {
+    fn as_ipv4_addrs(&self) -> Result<HashSet<IpAddr>> {
         self.as_str().as_ipv4_addrs()
     }
 }
 
 /// Support slice. Example: &["127.0.0.1", "127.0.0.2"]
 impl<I: AsIpv4Addrs> AsIpv4Addrs for &[I] {
-    fn as_ipv4_addrs(&self) -> Result<HashSet<Ipv4Addr>> {
+    fn as_ipv4_addrs(&self) -> Result<HashSet<IpAddr>> {
         let mut addrs = HashSet::new();
 
         for result in self.iter().map(I::as_ipv4_addrs) {
@@ -328,15 +347,15 @@ impl<I: AsIpv4Addrs> AsIpv4Addrs for &[I] {
 /// Optimization for zero sized/empty values, as `()` will never take up any space or evaluate to
 /// anything, helpful in contexts where we just want an empty value.
 impl AsIpv4Addrs for () {
-    fn as_ipv4_addrs(&self) -> Result<HashSet<Ipv4Addr>> {
+    fn as_ipv4_addrs(&self) -> Result<HashSet<IpAddr>> {
         Ok(HashSet::new())
     }
 }
 
 impl AsIpv4Addrs for std::net::Ipv4Addr {
-    fn as_ipv4_addrs(&self) -> Result<HashSet<Ipv4Addr>> {
+    fn as_ipv4_addrs(&self) -> Result<HashSet<IpAddr>> {
         let mut ips = HashSet::new();
-        ips.insert(*self);
+        ips.insert(IpAddr::V4(*self));
 
         Ok(ips)
     }
